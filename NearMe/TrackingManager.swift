@@ -27,6 +27,7 @@ final class TrackingManager: ObservableObject {
     private let conditionIdentifier = "NearMeDestination"
 
     private var monitor: CLMonitor?
+    private var monitorTask: Task<Void, Never>?
 
     // MARK: - Start Tracking
 
@@ -53,10 +54,12 @@ final class TrackingManager: ObservableObject {
         // Ask for notification permission
         await requestNotificationPermission()
 
-        // Create the Core Location monitor
-        let newMonitor = await CLMonitor(monitorName)
-
-        monitor = newMonitor
+        // Create the Core Location monitor if needed
+        if monitor == nil {
+            monitor = await CLMonitor(monitorName)
+        }
+        
+        guard let activeMonitor = monitor else { return }
 
         // Destination coordinate
         let coordinate = CLLocationCoordinate2D(
@@ -71,14 +74,14 @@ final class TrackingManager: ObservableObject {
         )
 
         // Remove an existing condition if necessary
-        let existingIdentifiers = await newMonitor.identifiers
+        let existingIdentifiers = await activeMonitor.identifiers
 
         if existingIdentifiers.contains(conditionIdentifier) {
-            await newMonitor.remove(conditionIdentifier)
+            await activeMonitor.remove(conditionIdentifier)
         }
 
         // Add the new geographic condition
-        await newMonitor.add(
+        await activeMonitor.add(
             condition,
             identifier: conditionIdentifier,
             assuming: .unsatisfied
@@ -88,18 +91,19 @@ final class TrackingManager: ObservableObject {
             "You'll be notified within \(formattedRadius(radius))"
 
         // Start listening for location events
-        Task {
-            await monitorEvents(newMonitor)
+        monitorTask?.cancel()
+        monitorTask = Task {
+            await monitorEvents(activeMonitor)
         }
     }
 
     // MARK: - Monitor Events
 
-    private func monitorEvents(_ monitor: CLMonitor) async {
+    private func monitorEvents(_ activeMonitor: CLMonitor) async {
 
         do {
 
-            for try await event in await monitor.events {
+            for try await event in await activeMonitor.events {
 
                 guard event.identifier == conditionIdentifier else {
                     continue
@@ -109,7 +113,10 @@ final class TrackingManager: ObservableObject {
 
                 case .satisfied:
 
-                    await destinationReached()
+                    Task {
+                        await destinationReached()
+                    }
+                    return // Exit the loop to avoid deadlocking CLMonitor
 
                 case .unsatisfied:
 
@@ -123,6 +130,7 @@ final class TrackingManager: ObservableObject {
 
                     trackingMessage = "Tracking stopped"
                     isTracking = false
+                    return // Exit the loop
 
                 @unknown default:
 
@@ -139,7 +147,7 @@ final class TrackingManager: ObservableObject {
 
     // MARK: - Destination Reached
 
-    private func destinationReached() async {
+    func destinationReached() async {
 
         guard isTracking else {
             return
@@ -159,6 +167,8 @@ final class TrackingManager: ObservableObject {
         if let monitor {
             await monitor.remove(conditionIdentifier)
         }
+        monitorTask?.cancel()
+        monitorTask = nil
     }
 
     // MARK: - Pause Tracking
@@ -180,6 +190,9 @@ final class TrackingManager: ObservableObject {
                 await monitor.remove(conditionIdentifier)
             }
         }
+        
+        monitorTask?.cancel()
+        monitorTask = nil
     }
 
     // MARK: - Resume Tracking
@@ -230,7 +243,8 @@ final class TrackingManager: ObservableObject {
         isTracking = true
         trackingMessage = "Tracking active"
 
-        Task {
+        monitorTask?.cancel()
+        monitorTask = Task {
             await monitorEvents(monitor)
         }
     }
@@ -252,6 +266,9 @@ final class TrackingManager: ObservableObject {
         isPaused = false
 
         trackingMessage = "Not tracking"
+        
+        monitorTask?.cancel()
+        monitorTask = nil
     }
 
     // MARK: - Notification Permission

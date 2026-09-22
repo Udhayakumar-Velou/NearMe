@@ -26,10 +26,14 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
         if status == .notDetermined {
 
-            manager.requestWhenInUseAuthorization()
+            manager.requestAlwaysAuthorization()
 
-        } else if status == .authorizedWhenInUse ||
-                  status == .authorizedAlways {
+        } else if status == .authorizedWhenInUse {
+            
+            manager.requestAlwaysAuthorization()
+            manager.startUpdatingLocation()
+            
+        } else if status == .authorizedAlways {
 
             manager.startUpdatingLocation()
         }
