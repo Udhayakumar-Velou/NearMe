@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UserNotifications
+import SwiftData
 
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
@@ -27,6 +28,7 @@ struct NearMeApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .modelContainer(for: HistoryItem.self)
         }
     }
 }

@@ -20,6 +20,7 @@ final class TrackingManager: ObservableObject {
     @Published var radius: CLLocationDistance = 500
 
     @Published var trackingMessage = "Not tracking"
+    @Published var showDestinationReached = false
 
     // MARK: - Private Properties
 
@@ -162,6 +163,7 @@ final class TrackingManager: ObservableObject {
 
         trackingMessage = "Destination reached"
         isTracking = false
+        showDestinationReached = true
 
         // Stop monitoring after arrival
         if let monitor {

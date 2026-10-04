@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreLocation
 import MapKit
+import SwiftData
 
 struct ContentView: View {
 
@@ -20,10 +21,14 @@ struct ContentView: View {
     @State private var showSheet = true
     @State private var sheetDetent: PresentationDetent = .fraction(0.15)
     @State private var shouldCenterHomeMap = true
+    @FocusState private var isSearchFocused: Bool
+
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \HistoryItem.date, order: .reverse) private var historyItems: [HistoryItem]
 
     var body: some View {
         ZStack(alignment: .top) {
-            // 1. Full-screen map
+            // 1. Full-screen map with bottom trailing controls overlay
             mapSection
                 .ignoresSafeArea()
 
@@ -38,6 +43,50 @@ struct ContentView: View {
                 }
             }
             .animation(.spring(), value: trackingManager.isTracking)
+        }
+        .overlay {
+            if trackingManager.showDestinationReached {
+                ZStack {
+                    Color.black.opacity(0.3).ignoresSafeArea()
+                        .onTapGesture { dismissDestinationReached() }
+                    
+                    VStack(spacing: 20) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 70))
+                            .foregroundStyle(.green)
+                            .symbolEffect(.bounce, options: .nonRepeating)
+                        
+                        VStack(spacing: 8) {
+                            Text("You've Arrived!")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                            
+                            Text("You reached \(trackingManager.destinationName ?? "your destination").")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        
+                        Button(action: { dismissDestinationReached() }) {
+                            Text("Awesome")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(Color.green)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+                    .padding(32)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 32))
+                    .shadow(radius: 20)
+                    .padding(40)
+                }
+                .transition(.scale(scale: 0.8).combined(with: .opacity))
+                .zIndex(100)
+            }
         }
         .sheet(isPresented: $showSheet) {
             sheetContent
@@ -55,9 +104,14 @@ struct ContentView: View {
         .onChange(of: locationManager.latitude) { _, _ in
             checkDistance()
             updateRoute()
-            searchCompleter.updateRegion(currentCoordinate)
             if selectedTab == 0 && shouldCenterHomeMap {
                 centerHomeMapIfPossible()
+                searchCompleter.updateRegion(currentCoordinate)
+            }
+        }
+        .onChange(of: searchCompleter.searchQuery) { _, newValue in
+            if !newValue.isEmpty && sheetDetent == .fraction(0.15) {
+                sheetDetent = .medium
             }
         }
         .onChange(of: selectedPlace) { _, place in
@@ -112,35 +166,31 @@ struct ContentView: View {
 
     // MARK: - Floating Tracking Status
     private var trackingStatusCard: some View {
-        HStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(trackingManager.isPaused ? Color.orange.opacity(0.2) : Color.green.opacity(0.2))
-                    .frame(width: 44, height: 44)
-                
-                Image(systemName: trackingManager.isPaused ? "pause.fill" : "location.fill")
-                    .foregroundStyle(trackingManager.isPaused ? .orange : .green)
-                    .font(.system(size: 20))
-            }
+        HStack(spacing: 12) {
+            Image(systemName: trackingManager.isPaused ? "pause.circle.fill" : "location.circle.fill")
+                .font(.system(size: 32))
+                .foregroundStyle(trackingManager.isPaused ? .orange : .green)
+                .symbolEffect(.pulse, options: .repeating, isActive: !trackingManager.isPaused)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(trackingManager.isPaused ? "Tracking Paused" : "Tracking Active")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(trackingManager.isPaused ? "Paused" : "Tracking Active")
+                    .font(.subheadline)
                     .fontWeight(.bold)
                 
-                if let selectedPlace {
-                    Text("\(selectedPlace.name ?? "Destination") • \(radiusText)")
-                        .font(.subheadline)
+                if let name = trackingManager.destinationName {
+                    Text("\(name) • \(radiusText)")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
-
             Spacer()
         }
-        .padding(12)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 1))
         .shadow(color: .black.opacity(0.15), radius: 10, y: 5)
     }
 
@@ -167,9 +217,35 @@ struct ContentView: View {
                 }
             }
             .mapStyle(.standard(elevation: .realistic))
+            .safeAreaPadding(.top, 70)
             .mapControls {
                 MapCompass()
-                MapUserLocationButton()
+            }
+            .overlay(alignment: .bottomTrailing) {
+                VStack(spacing: 16) {
+                    if selectedTab == 0 {
+                        Button(action: {
+                            withAnimation {
+                                cameraPosition = .userLocation(fallback: .automatic)
+                            }
+                        }) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.blue)
+                                .frame(width: 44, height: 44)
+                                .background(.regularMaterial)
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.15), radius: 5, y: 3)
+                        }
+                    }
+                    
+                    if selectedTab == 0 && selectedPlace != nil {
+                        floatingTrackingControls
+                    }
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, bottomPaddingForControls)
+                .animation(.spring(), value: sheetDetent)
             }
             .onTapGesture { point in
                 guard let coordinate = proxy.convert(point, from: .local) else { return }
@@ -186,13 +262,14 @@ struct ContentView: View {
             if selectedTab == 0 {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 20) {
-                        searchSection
+                        if selectedPlace == nil {
+                            searchSection
+                        }
                         
                         if let selectedPlace {
                             VStack(spacing: 16) {
                                 destinationCard(place: selectedPlace)
                                 radiusSection
-                                trackingControls
                             }
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                         } else if searchResults.isEmpty {
@@ -222,12 +299,18 @@ struct ContentView: View {
     // MARK: - Search Section
     private var searchSection: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 18, weight: .medium))
 
                 TextField("Search places...", text: $searchCompleter.searchQuery)
+                    .focused($isSearchFocused)
+                    .onChange(of: isSearchFocused) { _, focused in
+                        if focused {
+                            sheetDetent = .large
+                        }
+                    }
                     .textInputAutocapitalization(.words)
                     .submitLabel(.search)
                     .onSubmit { performSearch() }
@@ -240,21 +323,24 @@ struct ContentView: View {
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
+                            .font(.system(size: 16))
                     }
                 }
             }
-            .padding(14)
-            .background(Color(uiColor: .tertiarySystemFill))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemFill))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
 
             if !searchCompleter.completions.isEmpty {
                 VStack(spacing: 1) {
                     ForEach(searchCompleter.completions, id: \.self) { completion in
                         Button(action: { selectCompletion(completion) }) {
                             HStack(spacing: 16) {
-                                Image(systemName: "mappin.circle.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundStyle(.blue)
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 24, height: 24)
                                 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(completion.title)
@@ -272,6 +358,7 @@ struct ContentView: View {
                             .padding(.horizontal, 16)
                             .background(Color(uiColor: .secondarySystemGroupedBackground))
                         }
+                        .buttonStyle(.plain)
                         Divider().padding(.leading, 56)
                     }
                 }
@@ -302,6 +389,7 @@ struct ContentView: View {
                             .padding(.horizontal, 16)
                             .background(Color(uiColor: .secondarySystemGroupedBackground))
                         }
+                        .buttonStyle(.plain)
                         Divider().padding(.leading, 56)
                     }
                 }
@@ -397,9 +485,27 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 20))
     }
 
-    // MARK: - Tracking Controls
-    private var trackingControls: some View {
-        HStack(spacing: 12) {
+    // MARK: - Floating Tracking Controls
+    private var floatingTrackingControls: some View {
+        VStack(spacing: 16) {
+            if trackingManager.isTracking {
+                Button(action: {
+                    Task {
+                        await trackingManager.stopTracking()
+                        route = nil
+                    }
+                }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 54, height: 54)
+                        .background(Color.red)
+                        .clipShape(Circle())
+                        .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
+                }
+                .transition(.scale.combined(with: .opacity))
+            }
+
             Button(action: {
                 if !trackingManager.isTracking {
                     guard let destination = selectedPlace else { return }
@@ -412,6 +518,7 @@ struct ContentView: View {
                             longitude: coordinate.longitude,
                             radius: selectedRadius
                         )
+                        saveToHistory()
                         sheetDetent = .fraction(0.15)
                     }
                 } else if trackingManager.isPaused {
@@ -420,61 +527,89 @@ struct ContentView: View {
                     Task { await trackingManager.pauseTracking() }
                 }
             }) {
-                HStack {
-                    Image(systemName: !trackingManager.isTracking ? "bell.fill" : trackingManager.isPaused ? "play.fill" : "pause.fill")
-                    Text(!trackingManager.isTracking ? "Start Tracking" : trackingManager.isPaused ? "Resume" : "Pause")
-                        .fontWeight(.bold)
-                }
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
-                .background(!trackingManager.isTracking ? Color.blue : trackingManager.isPaused ? Color.green : Color.orange)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-            }
-            
-            if trackingManager.isTracking {
-                Button(action: {
-                    Task {
-                        await trackingManager.stopTracking()
-                        route = nil
-                    }
-                }) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 54, height: 54)
-                        .background(Color.red)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
+                Image(systemName: !trackingManager.isTracking ? "play.fill" : trackingManager.isPaused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
+                    .background(Color.black.opacity(0.8))
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.2), radius: 5, y: 3)
             }
         }
+        .animation(.spring(), value: trackingManager.isTracking)
+        .animation(.spring(), value: trackingManager.isPaused)
     }
 
     // MARK: - History
     private var historyView: some View {
-        VStack(spacing: 20) {
-            Text("History")
+        VStack(spacing: 0) {
+            Text("Recent Destinations")
                 .font(.title2)
                 .fontWeight(.bold)
                 .padding(.top, 20)
+                .padding(.bottom, 16)
             
-            Spacer()
-            
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 60))
-                .foregroundStyle(.tertiary)
-            
-            Text("No recent destinations")
-                .font(.headline)
-            Text("Your completed tracking destinations will appear here.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Spacer()
+            if historyItems.isEmpty {
+                VStack(spacing: 20) {
+                    Spacer()
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 60))
+                        .foregroundStyle(.tertiary)
+                    
+                    Text("No recent destinations")
+                        .font(.headline)
+                    Text("Your completed tracking destinations will appear here.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Spacer()
+                }
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(historyItems) { item in
+                            Button(action: {
+                                let placemark = MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: item.latitude, longitude: item.longitude))
+                                let mapItem = MKMapItem(placemark: placemark)
+                                mapItem.name = item.name
+                                selectPlace(mapItem)
+                                selectedTab = 0
+                            }) {
+                                HStack(spacing: 16) {
+                                    Image(systemName: "clock.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(.secondary)
+                                    
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.name)
+                                            .font(.body)
+                                            .fontWeight(.semibold)
+                                            .foregroundStyle(.primary)
+                                        if let address = item.address {
+                                            Text(address)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 12)
+                                .padding(.horizontal, 16)
+                                .background(Color(uiColor: .secondarySystemGroupedBackground))
+                            }
+                            .buttonStyle(.plain)
+                            Divider().padding(.leading, 54)
+                        }
+                    }
+                    .background(Color(uiColor: .secondarySystemGroupedBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 20)
+                }
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Logic Helpers
@@ -588,6 +723,54 @@ struct ContentView: View {
             Task {
                 await trackingManager.destinationReached()
             }
+        }
+    }
+
+    private var bottomPaddingForControls: CGFloat {
+        if sheetDetent == .medium {
+            return 440
+        } else if sheetDetent == .large {
+            return 750
+        } else {
+            return 160
+        }
+    }
+
+    private func saveToHistory() {
+        guard let name = trackingManager.destinationName,
+              let lat = trackingManager.destinationLatitude,
+              let lon = trackingManager.destinationLongitude else { return }
+        
+        let item = HistoryItem(
+            name: name,
+            address: trackingManager.destinationAddress,
+            latitude: lat,
+            longitude: lon,
+            date: Date()
+        )
+        
+        // Remove existing items with the same coordinates
+        for existing in historyItems where existing.latitude == lat && existing.longitude == lon {
+            modelContext.delete(existing)
+        }
+        
+        // Insert new item
+        modelContext.insert(item)
+        
+        // Keep only top 20 (delete the oldest ones if we exceed 20)
+        // Since historyItems is sorted by date descending, elements from index 19 onwards should be deleted
+        if historyItems.count >= 20 {
+            for i in 19..<historyItems.count {
+                modelContext.delete(historyItems[i])
+            }
+        }
+    }
+
+    private func dismissDestinationReached() {
+        withAnimation {
+            trackingManager.showDestinationReached = false
+            selectedPlace = nil
+            sheetDetent = .fraction(0.15)
         }
     }
 
